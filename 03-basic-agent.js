@@ -40,16 +40,103 @@ After receiving weather observation, you output the final result:
 
 `
 
-async function main() {
-
-    const response = await ai.models.generateContent({
-        model: MODEL,
-        contents: `
-        ${reactAgentPrompt}
-        Give me a list of activity ideas for what to do, considering where I am and the weather            
-        `
-    })
-
-    console.log(response.text);
+const schema = {
+    type: "array",
+    items: {
+        type: "object",
+        properties: {
+            type: {
+                type: "string",
+                enum: ["thought", "action", "result"]
+            },
+            content: { type: "string" },
+            function: { type: "string" },
+            parameters: {
+                type: "array",
+                items: { type: "string" }
+            }
+        },
+        required: ["type"]
+    }
 }
+
+async function main() {
+    startAgent("Suggest me a list of outdoor activities to do today")
+
+}
+
+/**
+ * 
+ * @param {*} role enum("user", "model", "function")
+ * @param {*} content 
+ * @returns 
+ */
+function createMessage(role, content) {
+    return {
+        role,
+        parts: [
+            {
+                text: content
+            }
+        ]
+    }
+}
+
+async function startAgent(query) {
+    const messages = [
+        createMessage("user", query)
+    ]
+
+    const response = await agentLoop(messages);
+    console.log(response);
+}
+
+/**
+ * 
+ * @param {[]} messages Chat history
+ */
+async function agentLoop(messages, maxIterations = 10) {
+    for (let iterations = 0; iterations < maxIterations; iterations++) {
+        console.log(`--- Iterations: ${iterations} -----`);
+
+        const response = await ai.models.generateContent({
+            model: MODEL,
+            contents: messages,
+            config: {
+                systemInstruction: reactAgentPrompt,
+                responseMimeType: "application/json",
+                responseSchema: schema
+            }
+        })
+
+        const responseArray = JSON.parse(response.text);
+        for (const r of responseArray) {
+
+            console.log(r);
+
+            if (r.type === "result") {
+                return r.content;
+            }
+
+            if (r.type === "action") {
+                let observation = null;
+
+                if (r.function === "getLocation") {
+                    observation = await getLocation();
+                } else if (r.function === "getCurrentWeather") {
+                    observation = await getCurrentWeather(r.parameters[0]);
+                } else {
+                    observation = "Unknown function call " + r.function;
+                }
+
+                console.log("\nObservation: " + JSON.stringify(observation));
+                // todo: add observation into the context
+                messages.push(createMessage("model", response.text));
+                messages.push(createMessage("user", `Observation: ${JSON.stringify(observation)}`));
+            }
+        }
+    }
+    return "The agent has reached the maximum number of iterations without a final result"
+}
+
 main();
